@@ -759,6 +759,7 @@ let lq=[], typing=false;
 function logCls(t){
   const tl=t.toLowerCase();
   if(tl.startsWith('you:')) return 'you';
+  // 'jarvis:' kept for backward-compat with any existing log/memory entries
   if(tl.startsWith('aris:')||tl.startsWith('jarvis:')) return 'aris';
   if(tl.startsWith('file:')) return 'file';
   if(tl.includes('err')) return 'err';
