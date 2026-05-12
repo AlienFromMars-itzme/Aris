@@ -45,7 +45,6 @@ It's not just an assistant — it's an extension of your digital life.
 git clone https://github.com/FatihMakes/Mark-XXXIX-OR.git
 cd Mark-XXXIX-OR
 pip install -r requirements.txt
-playwright install
 python main.py
 ```
 

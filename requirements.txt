@@ -5,7 +5,7 @@ pillow
 requests
 beautifulsoup4
 duckduckgo-search
-playwright
+zendriver
 pyautogui
 pyperclip
 pygetwindow

@@ -1,11 +1,14 @@
 import asyncio
-import threading
 import concurrent.futures
+import json
 import platform
 import shutil
 import subprocess
+import threading
 from pathlib import Path
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from urllib.parse import quote_plus
+
+import zendriver as zd
 
 
 def _get_default_browser_id() -> str:
@@ -49,22 +52,25 @@ _BROWSER_BINARIES = {
         "opera":   ["opera.exe"],
         "brave":   ["brave.exe"],
         "vivaldi": ["vivaldi.exe"],
+        "edge":    ["msedge.exe"],
         "chrome":  ["chrome.exe"],
-        "firefox": ["firefox.exe"],
+        "chromium": ["chromium.exe"],
     },
     "Darwin": {
         "opera":   ["opera"],
         "brave":   ["brave browser", "brave"],
         "vivaldi": ["vivaldi"],
+        "edge":    ["microsoft edge", "msedge"],
         "chrome":  ["google chrome", "google-chrome"],
-        "firefox": ["firefox"],
+        "chromium": ["chromium"],
     },
     "Linux": {
         "opera":   ["opera", "opera-stable"],
         "brave":   ["brave-browser", "brave"],
         "vivaldi": ["vivaldi-stable", "vivaldi"],
-        "chrome":  ["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"],
-        "firefox": ["firefox"],
+        "edge":    ["microsoft-edge", "microsoft-edge-stable", "msedge"],
+        "chrome":  ["google-chrome", "google-chrome-stable"],
+        "chromium": ["chromium-browser", "chromium"],
     },
 }
 
@@ -97,67 +103,58 @@ def _get_opera_executable() -> str | None:
     return None
 
 
-def _find_browser_executable(prog_id: str) -> tuple:
+def _find_browser_executable(prog_id: str) -> tuple[str | None, bool]:
     """
-    Returns (engine_name, exe_path, channel, is_opera).
-    is_opera=True → extra args needed to prevent private-mode launch.
+    Returns (exe_path, is_opera) for Chromium-family browsers supported by Zendriver.
     """
-    system  = platform.system()
+    system = platform.system()
     os_bins = _BROWSER_BINARIES.get(system, {})
 
-    if any(x in prog_id for x in ["firefox", "mozilla"]):
-        return "firefox", None, None, False
-
-    if "safari" in prog_id:
-        return "webkit", None, None, False
-
-    if "edge" in prog_id:
-        return "chromium", None, "msedge", False
+    if any(x in prog_id for x in ["firefox", "mozilla", "safari"]):
+        print("[Browser] ⚠️ Zendriver uses Chromium/CDP; ignoring non-Chromium default browser")
 
     if "opera" in prog_id:
         exe = _get_opera_executable()
         if exe:
-            return "chromium", exe, None, True
+            return exe, True
         for binary in os_bins.get("opera", []):
             path = shutil.which(binary)
             if path:
-                return "chromium", path, None, True
+                return path, True
 
     browser_patterns = {
         "brave":   ["brave"],
         "vivaldi": ["vivaldi"],
+        "edge":    ["edge", "msedge"],
         "chrome":  ["chrome"],
+        "chromium": ["chromium"],
     }
-    for browser_name, patterns in browser_patterns.items():
-        if not any(p in prog_id for p in patterns):
-            continue
-        binaries = os_bins.get(browser_name, [])
-        for binary in binaries:
+    ordered_browsers = list(browser_patterns)
+    matched_browsers = [
+        browser_name
+        for browser_name, patterns in browser_patterns.items()
+        if any(p in prog_id for p in patterns)
+    ]
+    for browser_name in matched_browsers + ordered_browsers:
+        for binary in os_bins.get(browser_name, []):
             path = shutil.which(binary)
             if path:
                 print(f"[Browser] 🔍 Found {browser_name} at: {path}")
-                return "chromium", path, None, False
+                return path, False
 
-    if "chrome" in prog_id or not prog_id:
-        return "chromium", None, "chrome", False
-
-    return "chromium", None, None, False
+    return None, False
 
 
 class _BrowserThread:
 
     def __init__(self):
-        self._loop       = None
-        self._thread     = None
-        self._ready      = threading.Event()
-        self._playwright = None
-        self._browser    = None
-        self._context    = None
-        self._page       = None
-        self._engine_name = "chromium"
-        self._exe_path   = None
-        self._channel    = None
-        self._is_opera   = False
+        self._loop = None
+        self._thread = None
+        self._ready = threading.Event()
+        self._browser = None
+        self._page = None
+        self._exe_path = None
+        self._is_opera = False
 
     def start(self):
         if self._thread and self._thread.is_alive():
@@ -171,12 +168,8 @@ class _BrowserThread:
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._init())
         self._ready.set()
         self._loop.run_forever()
-
-    async def _init(self):
-        self._playwright = await async_playwright().start()
 
     def run(self, coro, timeout: int = 30):
         if not self._loop:
@@ -189,93 +182,130 @@ class _BrowserThread:
     async def _launch_browser_if_needed(self):
         """
         Tarayıcıyı başlatır. Zaten açıksa hiçbir şey yapmaz.
-        Her zaman default tarayıcıyı kullanır, özel sekme açmaz.
+        Zendriver Chromium/CDP tabanlıdır, bu yüzden Chromium ailesi tarayıcıları kullanır.
         """
-        if self._browser and self._browser.is_connected():
+        if self._browser and not getattr(self._browser, "stopped", False):
             return
 
         prog_id = _get_default_browser_id()
-        self._engine_name, self._exe_path, self._channel, self._is_opera = _find_browser_executable(prog_id)
-        engine = getattr(self._playwright, self._engine_name)
+        self._exe_path, self._is_opera = _find_browser_executable(prog_id)
 
-        # Temel chromium argümanları
-        chromium_args = ["--start-maximized"]
-
+        browser_args = ["--start-maximized"]
         if self._is_opera:
             # Opera GX bazı sürümlerde varsayılan olarak private modda başlar.
             # Aşağıdaki flag'ler bunu engeller.
-            chromium_args += [
+            browser_args += [
                 "--disable-features=OperaPrivacyMode",
                 "--no-private",
             ]
             print("[Browser] 🎭 Opera detected — disabling private-mode flags")
 
-        launch_kwargs = {"headless": False}
-        if self._engine_name == "chromium":
-            launch_kwargs["args"] = chromium_args
+        launch_kwargs = {
+            "headless": False,
+            "browser_args": browser_args,
+        }
         if self._exe_path:
-            launch_kwargs["executable_path"] = self._exe_path
-        elif self._channel:
-            launch_kwargs["channel"] = self._channel
+            launch_kwargs["browser_executable_path"] = self._exe_path
 
         try:
-            self._browser = await engine.launch(**launch_kwargs)
+            self._browser = await zd.start(**launch_kwargs)
+            self._page = None
             print(
-                f"[Browser] ✅ Launched ({self._engine_name}"
-                f"{' / ' + self._channel if self._channel else ''}"
-                f"{' / ' + self._exe_path if self._exe_path else ''})"
+                "[Browser] ✅ Launched with Zendriver"
+                f"{' / ' + self._exe_path if self._exe_path else ''}"
             )
         except Exception as e:
-            print(f"[Browser] ⚠️ Launch failed ({e}), falling back to built-in Chromium")
-            self._browser = await self._playwright.chromium.launch(
-                headless=False,
-                args=["--start-maximized"]
-            )
+            if not self._exe_path:
+                raise
+            print(f"[Browser] ⚠️ Launch failed ({e}), falling back to Zendriver auto browser")
+            self._browser = await zd.start(headless=False, browser_args=["--start-maximized"])
+            self._page = None
 
     async def _get_page(self):
         """
         Mevcut sayfayı döndürür.
         - Tarayıcı kapalıysa açar.
-        - Context yoksa oluşturur.
-        - Sayfa kapalıysa yeni sekme açar (aynı pencerede).
-        - Sayfa zaten açıksa aynı sayfayı döndürür (yeni pencere açmaz).
+        - Sayfa yoksa yeni sekme açar.
+        - Sayfa zaten açıksa aynı sayfayı döndürür.
         """
         await self._launch_browser_if_needed()
 
-        if self._context is None:
-            self._context = await self._browser.new_context(
-                viewport=None,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                )
-            )
-
-        if self._page is None or self._page.is_closed():
-            self._page = await self._context.new_page()
+        if self._page is None:
+            self._page = await self._browser.get("about:blank")
 
         return self._page
+
+    @staticmethod
+    def _js(value) -> str:
+        return json.dumps(value)
+
+    @staticmethod
+    def _text_match_script(text: str, action: str = "click") -> str:
+        text_json = json.dumps(text.lower())
+        action_json = json.dumps(action)
+        return f"""
+(() => {{
+  const needle = {text_json};
+  const action = {action_json};
+  const candidates = Array.from(document.querySelectorAll('button, a, input, textarea, select, [role], [placeholder], [aria-label], label, *'));
+  const visible = (el) => {{
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }};
+  const labelFor = (el) => {{
+    if (!el.id) return '';
+    const label = document.querySelector(`label[for="${{CSS.escape(el.id)}}"]`);
+    return label ? label.innerText : '';
+  }};
+  const score = (el) => {{
+    const haystack = [el.innerText, el.textContent, el.value, el.placeholder, el.ariaLabel, el.getAttribute('aria-label'), el.getAttribute('role'), labelFor(el)]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (!haystack.includes(needle)) return -1;
+    return Math.abs(haystack.length - needle.length);
+  }};
+  const matches = candidates.filter(visible).map(el => [el, score(el)]).filter(([, s]) => s >= 0).sort((a, b) => a[1] - b[1]);
+  const el = matches[0]?.[0];
+  if (!el) return false;
+  el.scrollIntoView({{block: 'center', inline: 'center'}});
+  if (action === 'click') el.click();
+  else el.focus();
+  return true;
+}})()
+"""
+
+    @staticmethod
+    def _role_selector(role: str) -> str:
+        role_map = {
+            "button": "button, input[type='button'], input[type='submit'], input[type='reset'], [role='button']",
+            "link": "a[href], [role='link']",
+            "searchbox": "input[type='search'], [role='searchbox']",
+            "textbox": "input:not([type]), input[type='text'], input[type='email'], input[type='password'], input[type='search'], textarea, [contenteditable='true'], [role='textbox']",
+        }
+        return role_map.get(role, f"[role={json.dumps(role)}]")
 
     # ── Eylemler ─────────────────────────────────────────────────────────────
 
     async def _go_to(self, url: str) -> str:
         if not url.startswith("http"):
             url = "https://" + url
-        page = await self._get_page()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            return f"Opened: {page.url}"
-        except PlaywrightTimeout:
+            await self._launch_browser_if_needed()
+            self._page = await self._browser.get(url)
+            await self._page.wait_for_ready_state("interactive", timeout=15)
+            page_url = getattr(self._page, "url", url)
+            return f"Opened: {page_url}"
+        except asyncio.TimeoutError:
             return f"Timeout loading: {url}"
         except Exception as e:
             return f"Navigation error: {e}"
 
     async def _search(self, query: str, engine: str = "google") -> str:
+        encoded_query = quote_plus(query)
         engines = {
-            "google":     f"https://www.google.com/search?q={query.replace(' ', '+')}",
-            "bing":       f"https://www.bing.com/search?q={query.replace(' ', '+')}",
-            "duckduckgo": f"https://duckduckgo.com/?q={query.replace(' ', '+')}",
+            "google":     f"https://www.google.com/search?q={encoded_query}",
+            "bing":       f"https://www.bing.com/search?q={encoded_query}",
+            "duckduckgo": f"https://duckduckgo.com/?q={encoded_query}",
         }
         url = engines.get(engine.lower(), engines["google"])
         return await self._go_to(url)
@@ -284,13 +314,14 @@ class _BrowserThread:
         page = await self._get_page()
         try:
             if text:
-                await page.get_by_text(text, exact=False).first.click(timeout=8000)
-                return f"Clicked: '{text}'"
+                clicked = await page.evaluate(self._text_match_script(text, "click"))
+                return f"Clicked: '{text}'" if clicked else "Element not found or not clickable."
             elif selector:
-                await page.click(selector, timeout=8000)
+                element = await page.select(selector, timeout=8)
+                await element.click()
                 return f"Clicked: {selector}"
             return "No selector or text provided."
-        except PlaywrightTimeout:
+        except asyncio.TimeoutError:
             return "Element not found or not clickable."
         except Exception as e:
             return f"Click error: {e}"
@@ -298,10 +329,25 @@ class _BrowserThread:
     async def _type(self, selector=None, text: str = "", clear_first: bool = True) -> str:
         page = await self._get_page()
         try:
-            element = page.locator(selector).first if selector else page.locator(":focus")
-            if clear_first:
-                await element.clear()
-            await element.type(text, delay=50)
+            if selector:
+                element = await page.select(selector, timeout=8)
+                if clear_first:
+                    await element.clear_input()
+                await element.send_keys(text)
+            else:
+                await page.evaluate(f"""
+(() => {{
+  const el = document.activeElement;
+  if (!el) return false;
+  const text = {self._js(text)};
+  const clearFirst = {str(bool(clear_first)).lower()};
+  if ('value' in el) el.value = clearFirst ? text : el.value + text;
+  else el.textContent = clearFirst ? text : el.textContent + text;
+  el.dispatchEvent(new InputEvent('input', {{bubbles: true, inputType: 'insertText', data: text}}));
+  el.dispatchEvent(new Event('change', {{bubbles: true}}));
+  return true;
+}})()
+""")
             return "Text typed."
         except Exception as e:
             return f"Type error: {e}"
@@ -310,7 +356,7 @@ class _BrowserThread:
         page = await self._get_page()
         try:
             y = amount if direction == "down" else -amount
-            await page.mouse.wheel(0, y)
+            await page.evaluate(f"window.scrollBy(0, {int(y)})")
             return f"Scrolled {direction}."
         except Exception as e:
             return f"Scroll error: {e}"
@@ -318,7 +364,16 @@ class _BrowserThread:
     async def _press(self, key: str) -> str:
         page = await self._get_page()
         try:
-            await page.keyboard.press(key)
+            await page.evaluate(f"""
+(() => {{
+  const key = {self._js(key)};
+  const el = document.activeElement || document.body;
+  for (const type of ['keydown', 'keyup']) {{
+    el.dispatchEvent(new KeyboardEvent(type, {{key, bubbles: true, cancelable: true}}));
+  }}
+  return true;
+}})()
+""")
             return f"Pressed: {key}"
         except Exception as e:
             return f"Key error: {e}"
@@ -326,26 +381,27 @@ class _BrowserThread:
     async def _get_text(self) -> str:
         page = await self._get_page()
         try:
-            text = await page.inner_text("body")
+            text = await page.evaluate("document.body ? document.body.innerText : ''")
+            text = text or ""
             return text[:4000] if len(text) > 4000 else text
         except Exception as e:
             return f"Could not get page text: {e}"
 
     async def _fill_form(self, fields: dict) -> str:
-        page    = await self._get_page()
+        page = await self._get_page()
         results = []
         for selector, value in fields.items():
             try:
-                el = page.locator(selector).first
-                await el.clear()
-                await el.type(str(value), delay=40)
+                el = await page.select(selector, timeout=8)
+                await el.clear_input()
+                await el.send_keys(str(value))
                 results.append(f"✓ {selector}")
             except Exception as e:
                 results.append(f"✗ {selector}: {e}")
         return "Form filled: " + ", ".join(results)
 
     async def _smart_click(self, description: str) -> str:
-        page       = await self._get_page()
+        page = await self._get_page()
         desc_lower = description.lower()
 
         role_hints = {
@@ -357,20 +413,17 @@ class _BrowserThread:
         for role, keywords in role_hints.items():
             if any(k in desc_lower for k in keywords):
                 try:
-                    await page.get_by_role(role).first.click(timeout=5000)
+                    selector = self._role_selector(role)
+                    element = await page.select(selector, timeout=5)
+                    await element.click()
                     return f"Clicked ({role}): '{description}'"
                 except Exception:
                     pass
 
         try:
-            await page.get_by_text(description, exact=False).first.click(timeout=5000)
-            return f"Clicked (text): '{description}'"
-        except Exception:
-            pass
-
-        try:
-            await page.get_by_placeholder(description, exact=False).first.click(timeout=5000)
-            return f"Clicked (placeholder): '{description}'"
+            clicked = await page.evaluate(self._text_match_script(description, "click"))
+            if clicked:
+                return f"Clicked (text): '{description}'"
         except Exception:
             pass
 
@@ -379,40 +432,47 @@ class _BrowserThread:
     async def _smart_type(self, description: str, text: str) -> str:
         page = await self._get_page()
 
-        for method, locator in [
-            ("placeholder", page.get_by_placeholder(description, exact=False)),
-            ("label",       page.get_by_label(description, exact=False)),
-            ("role",        page.get_by_role("textbox")),
+        selectors = [
+            f"[placeholder*={self._js(description)} i]",
+            f"[aria-label*={self._js(description)} i]",
+            "input:not([type]), input[type='text'], input[type='email'], input[type='password'], input[type='search'], textarea, [contenteditable='true'], [role='textbox']",
+        ]
+        for method, selector in [
+            ("placeholder", selectors[0]),
+            ("label", selectors[1]),
+            ("role", selectors[2]),
         ]:
             try:
-                el = locator.first
-                await el.clear()
-                await el.type(text, delay=50)
+                el = await page.select(selector, timeout=5)
+                await el.clear_input()
+                await el.send_keys(text)
                 return f"Typed into ({method}): '{description}'"
             except Exception:
                 continue
+
+        try:
+            focused = await page.evaluate(self._text_match_script(description, "focus"))
+            if focused:
+                return await self._type(None, text, True)
+        except Exception:
+            pass
 
         return f"Could not find input: '{description}'"
 
     async def _close_browser(self) -> str:
         if self._browser:
-            await self._browser.close()
+            await self._browser.stop()
             self._browser = None
-            self._context = None
-            self._page    = None
-
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
+            self._page = None
 
         return "Browser closed."
 
 
 # ── Singleton browser thread ─────────────────────────────────────────────────
 
-_bt         = _BrowserThread()
+_bt = _BrowserThread()
 _bt_started = False
-_bt_lock    = threading.Lock()
+_bt_lock = threading.Lock()
 
 
 def _ensure_started():
@@ -426,13 +486,13 @@ def _ensure_started():
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def browser_control(
-    parameters:     dict,
+    parameters: dict,
     response=None,
     player=None,
     session_memory=None
 ) -> str:
     """
-    Browser controller — auto-detects and uses system default browser.
+    Browser controller — auto-detects and uses a Chromium-family browser through Zendriver.
     Always reuses the existing browser window/page; never opens incognito.
 
     parameters:
