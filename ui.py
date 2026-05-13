@@ -425,9 +425,9 @@ _HTML = r"""<!DOCTYPE html>
     <div class="sec-title">▸ ACTIVITY LOG</div>
     <div class="log" id="log"></div>
     <div class="log-tools">
-      <button class="tool-btn" onclick="clearLog()">CLEAR</button>
-      <button class="tool-btn" onclick="copyLog()">COPY</button>
-      <button class="tool-btn" onclick="focusInput()">FOCUS</button>
+      <button class="tool-btn" onclick="clearLog()" aria-label="Clear activity log">CLEAR</button>
+      <button class="tool-btn" onclick="copyLog()" aria-label="Copy activity log">COPY</button>
+      <button class="tool-btn" onclick="focusInput()" aria-label="Focus command input">FOCUS</button>
     </div>
 
     <div class="sep"></div>
@@ -796,7 +796,7 @@ function nextLog(){
 }
 
 function getLogText(){
-  return [...document.querySelectorAll('#log .le')].map(el=>el.textContent).join('\n').trim();
+  return [...document.querySelectorAll('#log .le')].map(el=>el.textContent).join('\n');
 }
 function clearLog(){
   document.getElementById('log').innerHTML='';
@@ -805,7 +805,7 @@ function clearLog(){
 }
 function copyLog(){
   const text=getLogText();
-  if(!text){appendLog('SYS: Log empty.');return;}
+  if(!text.trim()){appendLog('SYS: Log empty.');return;}
   if(window.pywebview && window.pywebview.api.copy_text){
     window.pywebview.api.copy_text(text).then(ok=>{
       appendLog(ok?'SYS: Log copied to clipboard.':'ERR: Clipboard copy failed.');
