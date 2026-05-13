@@ -223,6 +223,14 @@ _HTML = r"""<!DOCTYPE html>
   .le.sys{color:var(--acc2)}
   .le.cur::after{content:'▌';animation:blink .5s step-end infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  .log-tools{display:flex;gap:6px}
+  .tool-btn{
+    flex:1;height:26px;background:var(--panel2);color:var(--text-med);
+    border:1px solid var(--border);border-radius:3px;cursor:pointer;
+    font-family:'Courier New',Courier,monospace;font-size:8px;font-weight:bold;
+    letter-spacing:1px;transition:all .2s;outline:none;
+  }
+  .tool-btn:hover{color:var(--pri);border-color:var(--border-b);box-shadow:0 0 8px rgba(0,212,255,.2)}
   .sep{height:1px;background:var(--border);margin:2px 0}
 
   /* ── DROP ZONE ── */
@@ -415,6 +423,11 @@ _HTML = r"""<!DOCTYPE html>
   <div class="right">
     <div class="sec-title">▸ ACTIVITY LOG</div>
     <div class="log" id="log"></div>
+    <div class="log-tools">
+      <button class="tool-btn" onclick="clearLog()">CLEAR</button>
+      <button class="tool-btn" onclick="copyLog()">COPY</button>
+      <button class="tool-btn" onclick="focusInput()">FOCUS</button>
+    </div>
 
     <div class="sep"></div>
 
@@ -454,7 +467,7 @@ _HTML = r"""<!DOCTYPE html>
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>[F4] Mute  ·  [F11] Fullscreen</span>
+  <span>[F4] Mute  ·  [F11] Fullscreen  ·  [Ctrl+L] Clear Log  ·  [Ctrl+K] Focus</span>
   <span class="cred">A.R.I.S — Made by AlienFromMars</span>
   <span class="copy">© 2026 AlienFromMars Industries</span>
 </div>
@@ -781,6 +794,34 @@ function nextLog(){
   },6);
 }
 
+function getLogText(){
+  return [...document.querySelectorAll('#log .le')].map(el=>el.textContent).join('\n').trim();
+}
+function clearLog(){
+  document.getElementById('log').innerHTML='';
+  lq=[]; typing=false;
+  appendLog('SYS: Log cleared.');
+}
+function copyLog(){
+  const text=getLogText();
+  if(!text){appendLog('SYS: Log empty.');return;}
+  if(window.pywebview && window.pywebview.api.copy_text){
+    window.pywebview.api.copy_text(text).then(ok=>{
+      appendLog(ok?'SYS: Log copied to clipboard.':'ERR: Clipboard copy failed.');
+    });
+  } else if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text)
+      .then(()=>appendLog('SYS: Log copied to clipboard.'))
+      .catch(()=>appendLog('ERR: Clipboard copy failed.'));
+  } else {
+    appendLog('ERR: Clipboard unavailable.');
+  }
+}
+function focusInput(){
+  const inp=document.getElementById('ci');
+  if(inp) inp.focus();
+}
+
 // ── File ────────────────────────────────────────────────────────────────
 const ICONS={image:'🖼',video:'🎬',audio:'🎵',pdf:'📄',word:'📝',
   excel:'📊',code:'💻',archive:'📦',text:'📃',data:'🔧',unknown:'📎'};
@@ -842,6 +883,8 @@ function toggleFS(){
 document.addEventListener('keydown',e=>{
   if(e.key==='F4'){e.preventDefault();toggleMute();}
   if(e.key==='F11'){e.preventDefault();toggleFS();}
+  if(e.ctrlKey && e.key.toLowerCase()==='l'){e.preventDefault();clearLog();}
+  if(e.ctrlKey && e.key.toLowerCase()==='k'){e.preventDefault();focusInput();}
 });
 
 // ── Setup ────────────────────────────────────────────────────────────────
@@ -933,6 +976,14 @@ class ArisAPI:
     def send_command(self, text: str):
         if text and self.on_text_command:
             threading.Thread(target=self.on_text_command, args=(text,), daemon=True).start()
+
+    def copy_text(self, text: str) -> bool:
+        try:
+            import pyperclip
+            pyperclip.copy(text or "")
+            return True
+        except Exception:
+            return False
 
     def toggle_mute(self) -> bool:
         self._muted = not self._muted

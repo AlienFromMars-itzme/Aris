@@ -2,6 +2,7 @@ import asyncio
 import threading
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -502,6 +503,7 @@ class ArisLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
+        self._last_speech_ts = 0.0
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
@@ -519,9 +521,14 @@ class ArisLive:
         with self._speaking_lock:
             self._is_speaking = value
         if value:
+            self._mark_speaking_activity()
+        if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+
+    def _mark_speaking_activity(self):
+        self._last_speech_ts = time.time()
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -760,6 +767,7 @@ class ArisLive:
                         sc = response.server_content
 
                         if sc.output_transcription and sc.output_transcription.text:
+                            self._mark_speaking_activity()
                             self.set_speaking(True)
                             txt = sc.output_transcription.text.strip()
                             if txt:
@@ -772,6 +780,7 @@ class ArisLive:
 
                         if sc.turn_complete:
                             self.set_speaking(False)
+                            self._last_speech_ts = 0.0
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -819,6 +828,7 @@ class ArisLive:
         try:
             while True:
                 chunk = await self.audio_in_queue.get()
+                self._mark_speaking_activity()
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
@@ -828,6 +838,19 @@ class ArisLive:
             self.set_speaking(False)
             stream.stop()
             stream.close()
+
+    async def _speech_watchdog(self):
+        while True:
+            await asyncio.sleep(0.5)
+            if self.ui.muted:
+                continue
+            with self._speaking_lock:
+                aris_speaking = self._is_speaking
+            if not aris_speaking:
+                continue
+            last = self._last_speech_ts
+            if last and (time.time() - last) > 2.0:
+                self.set_speaking(False)
 
     async def run(self):
         client = genai.Client(
@@ -858,6 +881,7 @@ class ArisLive:
                     tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
+                    tg.create_task(self._speech_watchdog())
                     
             except Exception as e:
                 print(f"[ARIS] ⚠️ {e}")
