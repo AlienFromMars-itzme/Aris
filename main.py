@@ -49,7 +49,7 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 SPEECH_WATCHDOG_INTERVAL_SECONDS = 0.5
-SPEECH_TIMEOUT_SECONDS = 2.0  # watchdog timeout to reset stuck speaking state
+SPEECH_WATCHDOG_TIMEOUT_SECONDS = 2.0  # duration threshold for watchdog reset
 
 
 def _get_api_key() -> str:
@@ -781,7 +781,7 @@ class ArisLive:
 
                         if sc.turn_complete:
                             self.set_speaking(False)
-                            self._last_speech_ts = None
+                            self._last_speech_ts = None  # avoid watchdog resets after completed turn
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -850,7 +850,10 @@ class ArisLive:
                 last = self._last_speech_ts
             if not aris_speaking:
                 continue
-            if last is not None and (time.time() - last) > SPEECH_TIMEOUT_SECONDS:
+            if last is not None and (time.time() - last) > SPEECH_WATCHDOG_TIMEOUT_SECONDS:
+                self.ui.write_log(
+                    f"SYS: Speech watchdog reset (>{SPEECH_WATCHDOG_TIMEOUT_SECONDS:.1f}s)."
+                )
                 self.set_speaking(False)
 
     async def run(self):

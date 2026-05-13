@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 
 import psutil
-import pyperclip
+try:
+    import pyperclip
+except Exception:
+    pyperclip = None
 import webview
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -468,7 +471,10 @@ _HTML = r"""<!DOCTYPE html>
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>[F4] Mute · [F11] Fullscreen · [Ctrl+Shift+L] Clear Log · [Ctrl+Shift+K] Focus</span>
+  <span id="shortcut-hint"
+        title="F4 Mute · F11 Fullscreen · Ctrl+Shift+L Clear Log · Ctrl+Shift+K Focus Input">
+    Shortcuts: F4/F11 · Ctrl+Shift+L/K
+  </span>
   <span class="cred">A.R.I.S — Made by AlienFromMars</span>
   <span class="copy">© 2026 AlienFromMars Industries</span>
 </div>
@@ -804,6 +810,8 @@ function clearLog(){
   appendLog('SYS: Log cleared.');
 }
 function copyLog(){
+  const logEl=document.getElementById('log');
+  if(!logEl || !logEl.children.length){appendLog('SYS: Log empty.');return;}
   const text=getLogText();
   if(!text.trim()){appendLog('SYS: Log empty.');return;}
   if(window.pywebview && window.pywebview.api.copy_text){
@@ -980,6 +988,8 @@ class ArisAPI:
 
     def copy_text(self, text: str) -> bool:
         try:
+            if not pyperclip:
+                return False
             pyperclip.copy(text or "")
             return True
         except Exception:
