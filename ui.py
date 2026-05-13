@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import psutil
+import pyperclip
 import webview
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -979,7 +980,6 @@ class ArisAPI:
 
     def copy_text(self, text: str) -> bool:
         try:
-            import pyperclip
             pyperclip.copy(text or "")
             return True
         except Exception:

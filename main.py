@@ -522,7 +522,6 @@ class ArisLive:
             self._is_speaking = value
         if value:
             self._mark_speaking_activity()
-        if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
