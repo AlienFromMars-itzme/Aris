@@ -48,6 +48,8 @@ CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE          = 1024
+SPEECH_WATCHDOG_INTERVAL = 0.5
+SPEECH_TIMEOUT_SECONDS   = 2.0
 
 
 def _get_api_key() -> str:
@@ -840,7 +842,7 @@ class ArisLive:
 
     async def _speech_watchdog(self):
         while True:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(SPEECH_WATCHDOG_INTERVAL)
             if self.ui.muted:
                 continue
             with self._speaking_lock:
@@ -848,7 +850,7 @@ class ArisLive:
             if not aris_speaking:
                 continue
             last = self._last_speech_ts
-            if last and (time.time() - last) > 2.0:
+            if last and (time.time() - last) > SPEECH_TIMEOUT_SECONDS:
                 self.set_speaking(False)
 
     async def run(self):

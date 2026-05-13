@@ -23,7 +23,7 @@ RULES:
 LANGUAGE:
 - Always respond in English, even if the user speaks another language.
 - Always extract tool parameters in English.
-- Example: "¿Cuál es el clima en Madrid?" → weather_report city:"Madrid", reply in English.
+- Example: "¿Cuál es el clima en Madrid?" → weather_report city:"Madrid"; respond in English.
 
 TOOL SELECTION:
 - computer_settings → volume, brightness, screen, refresh, scroll, minimize, maximize, 
