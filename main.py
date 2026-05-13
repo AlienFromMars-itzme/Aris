@@ -2,6 +2,7 @@ import asyncio
 import threading
 import json
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -42,11 +43,13 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-CHANNELS            = 1
-SEND_SAMPLE_RATE    = 16000
+LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+CHANNELS = 1
+SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE          = 1024
+CHUNK_SIZE = 1024
+SPEECH_WATCHDOG_INTERVAL_SECONDS = 0.5
+SPEECH_WATCHDOG_TIMEOUT_SECONDS = 2.0  # duration threshold for watchdog reset
 
 
 def _get_api_key() -> str:
@@ -502,6 +505,7 @@ class ArisLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
+        self._last_speech_ts = None  # timestamp of last speech activity
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
@@ -519,9 +523,13 @@ class ArisLive:
         with self._speaking_lock:
             self._is_speaking = value
         if value:
+            self._mark_speaking_activity()
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+
+    def _mark_speaking_activity(self):
+        self._last_speech_ts = time.time()
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -760,6 +768,7 @@ class ArisLive:
                         sc = response.server_content
 
                         if sc.output_transcription and sc.output_transcription.text:
+                            self._mark_speaking_activity()
                             self.set_speaking(True)
                             txt = sc.output_transcription.text.strip()
                             if txt:
@@ -772,6 +781,7 @@ class ArisLive:
 
                         if sc.turn_complete:
                             self.set_speaking(False)
+                            self._last_speech_ts = None  # avoid watchdog resets after completed turn
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -819,6 +829,7 @@ class ArisLive:
         try:
             while True:
                 chunk = await self.audio_in_queue.get()
+                self._mark_speaking_activity()
                 self.set_speaking(True)
                 await asyncio.to_thread(stream.write, chunk)
         except Exception as e:
@@ -828,6 +839,22 @@ class ArisLive:
             self.set_speaking(False)
             stream.stop()
             stream.close()
+
+    async def _speech_watchdog(self):
+        while True:
+            await asyncio.sleep(SPEECH_WATCHDOG_INTERVAL_SECONDS)
+            if self.ui.muted:
+                continue
+            with self._speaking_lock:
+                aris_speaking = self._is_speaking
+                last = self._last_speech_ts
+            if not aris_speaking:
+                continue
+            if last is not None and (time.time() - last) > SPEECH_WATCHDOG_TIMEOUT_SECONDS:
+                self.ui.write_log(
+                    f"SYS: Speech watchdog reset (>{SPEECH_WATCHDOG_TIMEOUT_SECONDS:.1f}s)."
+                )
+                self.set_speaking(False)
 
     async def run(self):
         client = genai.Client(
@@ -858,6 +885,7 @@ class ArisLive:
                     tg.create_task(self._listen_audio())
                     tg.create_task(self._receive_audio())
                     tg.create_task(self._play_audio())
+                    tg.create_task(self._speech_watchdog())
                     
             except Exception as e:
                 print(f"[ARIS] ⚠️ {e}")
