@@ -468,7 +468,7 @@ _HTML = r"""<!DOCTYPE html>
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>[F4] Mute  ·  [F11] Fullscreen  ·  [Ctrl+Shift+L] Clear Log  ·  [Ctrl+Shift+K] Focus</span>
+  <span>[F4] Mute · [F11] Fullscreen · [Ctrl+Shift+L] Clear Log · [Ctrl+Shift+K] Focus</span>
   <span class="cred">A.R.I.S — Made by AlienFromMars</span>
   <span class="copy">© 2026 AlienFromMars Industries</span>
 </div>

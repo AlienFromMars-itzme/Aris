@@ -49,7 +49,7 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 SPEECH_WATCHDOG_INTERVAL_SECONDS = 0.5
-SPEECH_TIMEOUT_SECONDS = 2.0
+SPEECH_TIMEOUT_SECONDS = 2.0  # watchdog timeout to reset stuck speaking state
 
 
 def _get_api_key() -> str:
@@ -505,7 +505,7 @@ class ArisLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
-        self._last_speech_ts = None
+        self._last_speech_ts = None  # timestamp of last speech activity
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
