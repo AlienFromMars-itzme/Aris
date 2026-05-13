@@ -468,7 +468,7 @@ _HTML = r"""<!DOCTYPE html>
 
 <!-- FOOTER -->
 <div class="footer">
-  <span>[F4] Mute  ·  [F11] Fullscreen  ·  [Ctrl+L] Clear Log  ·  [Ctrl+K] Focus</span>
+  <span>[F4] Mute  ·  [F11] Fullscreen  ·  [Ctrl+Shift+L] Clear Log  ·  [Ctrl+Shift+K] Focus</span>
   <span class="cred">A.R.I.S — Made by AlienFromMars</span>
   <span class="copy">© 2026 AlienFromMars Industries</span>
 </div>
@@ -884,8 +884,8 @@ function toggleFS(){
 document.addEventListener('keydown',e=>{
   if(e.key==='F4'){e.preventDefault();toggleMute();}
   if(e.key==='F11'){e.preventDefault();toggleFS();}
-  if(e.ctrlKey && e.key.toLowerCase()==='l'){e.preventDefault();clearLog();}
-  if(e.ctrlKey && e.key.toLowerCase()==='k'){e.preventDefault();focusInput();}
+  if(e.ctrlKey && e.shiftKey && e.key.toLowerCase()==='l'){e.preventDefault();clearLog();}
+  if(e.ctrlKey && e.shiftKey && e.key.toLowerCase()==='k'){e.preventDefault();focusInput();}
 });
 
 // ── Setup ────────────────────────────────────────────────────────────────

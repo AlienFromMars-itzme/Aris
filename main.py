@@ -43,13 +43,13 @@ def get_base_dir():
 BASE_DIR        = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL                       = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-CHANNELS                         = 1
-SEND_SAMPLE_RATE                 = 16000
-RECEIVE_SAMPLE_RATE              = 24000
-CHUNK_SIZE                       = 1024
+LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+CHANNELS = 1
+SEND_SAMPLE_RATE = 16000
+RECEIVE_SAMPLE_RATE = 24000
+CHUNK_SIZE = 1024
 SPEECH_WATCHDOG_INTERVAL_SECONDS = 0.5
-SPEECH_TIMEOUT_SECONDS           = 2.0
+SPEECH_TIMEOUT_SECONDS = 2.0
 
 
 def _get_api_key() -> str:
@@ -505,7 +505,7 @@ class ArisLive:
         self._loop          = None
         self._is_speaking   = False
         self._speaking_lock = threading.Lock()
-        self._last_speech_ts = 0.0
+        self._last_speech_ts = None
         self.ui.on_text_command = self._on_text_command
 
     def _on_text_command(self, text: str):
@@ -781,7 +781,7 @@ class ArisLive:
 
                         if sc.turn_complete:
                             self.set_speaking(False)
-                            self._last_speech_ts = 0.0
+                            self._last_speech_ts = None
 
                             full_in = " ".join(in_buf).strip()
                             if full_in:
@@ -850,7 +850,7 @@ class ArisLive:
                 last = self._last_speech_ts
             if not aris_speaking:
                 continue
-            if last and (time.time() - last) > SPEECH_TIMEOUT_SECONDS:
+            if last is not None and (time.time() - last) > SPEECH_TIMEOUT_SECONDS:
                 self.set_speaking(False)
 
     async def run(self):
